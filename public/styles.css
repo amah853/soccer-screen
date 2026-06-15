@@ -52,6 +52,10 @@ body {
     );
 }
 
+.scoreboard.goal-active {
+  animation: pitchSurge 5.4s ease-out;
+}
+
 .scoreboard::after {
   content: "";
   position: absolute;
@@ -366,20 +370,160 @@ body {
 .goal-flash {
   position: absolute;
   inset: 0;
+  z-index: 10;
   display: grid;
   place-items: center;
   pointer-events: none;
-  color: #ffffff;
-  font-size: clamp(80px, 14vw, 220px);
-  font-weight: 950;
-  letter-spacing: 0;
   opacity: 0;
-  background: rgba(23, 75, 45, 0.76);
-  transform: scale(1.08);
+  background:
+    radial-gradient(circle at 50% 45%, rgba(242, 201, 76, 0.32), transparent 28%),
+    radial-gradient(circle at 20% 50%, rgba(40, 209, 124, 0.38), transparent 30%),
+    radial-gradient(circle at 80% 50%, rgba(73, 167, 255, 0.3), transparent 30%),
+    rgba(2, 10, 5, 0.74);
+  overflow: hidden;
+  transform: scale(1.02);
 }
 
 .goal-flash.show {
-  animation: goalFlash 1.15s ease-out;
+  animation: goalFlash 5.4s ease-out both;
+}
+
+.goal-light {
+  position: absolute;
+  top: 50%;
+  width: 42vw;
+  height: 42vw;
+  border-radius: 50%;
+  opacity: 0;
+  filter: blur(4px);
+  transform: translateY(-50%) scale(0.6);
+}
+
+.goal-light-left {
+  left: -10vw;
+  background: radial-gradient(circle, rgba(242, 201, 76, 0.62), transparent 64%);
+}
+
+.goal-light-right {
+  right: -10vw;
+  background: radial-gradient(circle, rgba(73, 167, 255, 0.5), transparent 64%);
+}
+
+.goal-flash.show .goal-light {
+  animation: goalLight 5.2s ease-out both;
+}
+
+.goal-card {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  justify-items: center;
+  width: min(980px, 88vw);
+  padding: clamp(22px, 4vw, 58px);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04)),
+    rgba(3, 7, 6, 0.86);
+  box-shadow:
+    0 30px 100px rgba(0, 0, 0, 0.54),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  opacity: 0;
+  transform: translateY(28px) scale(0.82);
+}
+
+.goal-flash.show .goal-card {
+  animation: goalCard 5.1s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.goal-kicker {
+  margin: 0;
+  color: var(--accent);
+  font-size: clamp(84px, 16vw, 230px);
+  font-weight: 950;
+  line-height: 0.78;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  text-shadow: 0 8px 0 rgba(0, 0, 0, 0.18);
+}
+
+.goal-flag-ring {
+  display: grid;
+  place-items: center;
+  width: clamp(96px, 13vw, 180px);
+  aspect-ratio: 1;
+  margin-top: clamp(18px, 2.5vw, 34px);
+  border: 3px solid rgba(255, 255, 255, 0.34);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 0 12px rgba(242, 201, 76, 0.12);
+  overflow: hidden;
+}
+
+.goal-flag {
+  display: none;
+  width: 76%;
+  height: 76%;
+  object-fit: contain;
+}
+
+.goal-flag.is-visible {
+  display: block;
+}
+
+.goal-flag-fallback {
+  font-size: clamp(32px, 5vw, 70px);
+  font-weight: 950;
+}
+
+.goal-flag.is-visible + .goal-flag-fallback {
+  display: none;
+}
+
+.goal-team {
+  max-width: 100%;
+  margin: clamp(18px, 2.5vw, 34px) 0 0;
+  color: #ffffff;
+  font-size: clamp(34px, 6vw, 96px);
+  font-weight: 950;
+  line-height: 0.94;
+  text-align: center;
+  text-transform: uppercase;
+  text-wrap: balance;
+}
+
+.goal-scoreline {
+  margin: clamp(12px, 1.8vw, 22px) 0 0;
+  padding: 8px 22px;
+  border: 1px solid rgba(242, 201, 76, 0.52);
+  border-radius: 8px;
+  color: var(--accent);
+  background: rgba(0, 0, 0, 0.34);
+  font-size: clamp(26px, 4vw, 58px);
+  font-weight: 900;
+  line-height: 1;
+}
+
+.confetti-field {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.confetti-piece {
+  position: absolute;
+  top: -8vh;
+  left: var(--x);
+  width: var(--w);
+  height: var(--h);
+  border-radius: 2px;
+  background: var(--color);
+  opacity: 0;
+  transform: translate3d(0, 0, 0) rotate(0deg);
+}
+
+.goal-flash.show .confetti-piece {
+  animation: confettiFall var(--duration) cubic-bezier(0.12, 0.55, 0.3, 1) var(--delay) both;
 }
 
 @keyframes pulse {
@@ -392,18 +536,90 @@ body {
   }
 }
 
+@keyframes pitchSurge {
+  0%,
+  100% {
+    filter: saturate(1) brightness(1);
+  }
+  12% {
+    filter: saturate(1.55) brightness(1.24);
+  }
+  55% {
+    filter: saturate(1.2) brightness(1.08);
+  }
+}
+
 @keyframes goalFlash {
   0% {
     opacity: 0;
-    transform: scale(1.08);
+    transform: scale(1.02);
   }
-  16% {
+  8% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  82% {
     opacity: 1;
     transform: scale(1);
   }
   100% {
     opacity: 0;
     transform: scale(1);
+  }
+}
+
+@keyframes goalCard {
+  0% {
+    opacity: 0;
+    transform: translateY(34px) scale(0.78);
+  }
+  10% {
+    opacity: 1;
+    transform: translateY(0) scale(1.04);
+  }
+  18% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  82% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.96);
+  }
+}
+
+@keyframes goalLight {
+  0% {
+    opacity: 0;
+    transform: translateY(-50%) scale(0.6);
+  }
+  12% {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+  }
+  70% {
+    opacity: 0.78;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-50%) scale(1.18);
+  }
+}
+
+@keyframes confettiFall {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  8% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.95;
+    transform: translate3d(var(--dx), 118vh, 0) rotate(var(--rotate));
   }
 }
 
@@ -462,6 +678,18 @@ body {
 
   .match-clock {
     font-size: clamp(21px, 6vw, 34px);
+  }
+
+  .goal-card {
+    width: min(340px, 88vw);
+  }
+
+  .goal-kicker {
+    font-size: clamp(78px, 24vw, 120px);
+  }
+
+  .goal-team {
+    font-size: clamp(32px, 10vw, 48px);
   }
 }
 

@@ -5,3 +5,4 @@ data/api-cache.json
 data/crests/*
 !data/crests/.gitkeep
 .DS_Store
+tmp

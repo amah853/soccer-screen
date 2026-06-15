@@ -514,7 +514,8 @@ function contentType(filePath) {
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
     '.jpeg': 'image/jpeg',
-    '.webp': 'image/webp'
+    '.webp': 'image/webp',
+    '.mp3': 'audio/mpeg'
   }[ext] || 'application/octet-stream';
 }
 

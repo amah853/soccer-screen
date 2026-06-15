@@ -55,7 +55,20 @@
         <p class="update-line" id="updateLine">Last update pending</p>
       </footer>
 
-      <div class="goal-flash" id="goalFlash" aria-hidden="true">GOAL!</div>
+      <div class="goal-flash" id="goalFlash" aria-hidden="true">
+        <div class="goal-light goal-light-left"></div>
+        <div class="goal-light goal-light-right"></div>
+        <div class="confetti-field" id="confettiField"></div>
+        <div class="goal-card">
+          <p class="goal-kicker">GOAL</p>
+          <div class="goal-flag-ring">
+            <img class="goal-flag" id="goalFlag" alt="">
+            <span class="goal-flag-fallback" id="goalFlagFallback">FC</span>
+          </div>
+          <p class="goal-team" id="goalTeam">Team</p>
+          <p class="goal-scoreline" id="goalScoreline">0 - 0</p>
+        </div>
+      </div>
     </main>
 
     <script src="/app.js" defer></script>
