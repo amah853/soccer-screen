@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#02050b">
+    <title>Live Football Scoreboard</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="scoreboard" id="scoreboard">
+      <div class="pitch" aria-hidden="true">
+        <span class="pitch-line halfway"></span>
+        <span class="pitch-line center-circle"></span>
+        <span class="pitch-line center-spot"></span>
+        <span class="pitch-line box box-left"></span>
+        <span class="pitch-line box box-right"></span>
+        <span class="pitch-line six six-left"></span>
+        <span class="pitch-line six six-right"></span>
+      </div>
+      <header class="match-header">
+        <p class="competition" id="competition">Football</p>
+        <p class="stage" id="stage">MATCH</p>
+      </header>
+
+      <section class="match-main" aria-live="polite">
+        <article class="team team-home">
+          <div class="crest-frame" id="homeCrestFrame">
+            <img class="crest" id="homeCrest" alt="">
+            <span class="crest-fallback" id="homeFallback">FC</span>
+          </div>
+          <h1 class="team-name" id="homeName">Home</h1>
+        </article>
+
+        <div class="score-block" id="scoreBlock">
+          <span class="score-number" id="homeScore">0</span>
+          <span class="score-divider"></span>
+          <span class="score-number" id="awayScore">0</span>
+        </div>
+
+        <article class="team team-away">
+          <div class="crest-frame" id="awayCrestFrame">
+            <img class="crest" id="awayCrest" alt="">
+            <span class="crest-fallback" id="awayFallback">FC</span>
+          </div>
+          <h1 class="team-name" id="awayName">Away</h1>
+        </article>
+      </section>
+
+      <footer class="match-footer">
+        <div class="status-strip">
+          <span class="live-dot" id="liveDot"></span>
+          <span class="match-clock" id="matchClock">Waiting for live match data...</span>
+        </div>
+        <p class="update-line" id="updateLine">Last update pending</p>
+      </footer>
+
+      <div class="goal-flash" id="goalFlash" aria-hidden="true">GOAL!</div>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

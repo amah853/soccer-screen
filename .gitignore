@@ -1,0 +1,7 @@
+node_modules/
+.env
+data/cache.json
+data/api-cache.json
+data/crests/*
+!data/crests/.gitkeep
+.DS_Store
