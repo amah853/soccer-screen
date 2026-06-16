@@ -88,6 +88,7 @@ let state = {
 let pollTimer = null;
 let requestLog = [];
 let headerThrottleUntil = 0;
+let needsStartupLiveCheck = true;
 
 await ensureDirectories();
 await loadCache();
@@ -191,10 +192,11 @@ async function poll() {
 
   state.tokenConfigured = true;
 
-  const shouldCheckLive = state.mode === 'starting' || state.mode === 'live' || shouldUseLiveEndpoint();
+  const shouldCheckLive = needsStartupLiveCheck || state.mode === 'starting' || state.mode === 'live' || shouldUseLiveEndpoint();
 
   if (shouldCheckLive) {
     const liveMatches = await fetchMatches({ status: 'LIVE' });
+    needsStartupLiveCheck = false;
     const liveSelection = selectLiveMatch(liveMatches);
 
     if (liveSelection) {
