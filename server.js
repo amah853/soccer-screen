@@ -31,8 +31,8 @@ const RATE_LIMIT_BACKOFF_MS = 15 * 60_000;
 const LOW_BUCKET_THRESHOLD = 1;
 const UPCOMING_WINDOW_DAYS = 10;
 const KICKOFF_WATCH_WINDOW_MS = 5 * 60_000;
-const CLIENT_REFRESH_LIVE_MS = 5_000;
-const CLIENT_REFRESH_IDLE_MS = 5_000;
+const CLIENT_REFRESH_LIVE_MS = 1_000;
+const CLIENT_REFRESH_IDLE_MS = 1_000;
 
 const ESPN_LEAGUES = [
   { code: 'fifa.world', name: 'FIFA World Cup', weight: 1000 },
