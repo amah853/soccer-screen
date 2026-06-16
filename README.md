@@ -74,7 +74,7 @@ sudo apt install -y nodejs npm chromium-browser
 Clone the repo and run once:
 
 ```bash
-git clone <repo-url> ~/soccer-screen
+git clone https://github.com/amah853/soccer-screen.git ~/soccer-screen
 cd ~/soccer-screen
 npm install
 cp .env.example .env

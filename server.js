@@ -1,28 +1,35 @@
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const execFileAsync = promisify(execFile);
+
+loadDotEnv();
 
 const PORT = Number(process.env.PORT || 3000);
 const API_BASE = 'https://api.football-data.org/v4';
 const TOKEN = process.env.FOOTBALL_DATA_API_TOKEN || process.env.FOOTBALL_DATA_TOKEN || '';
 const SPORT_NAME = normalizeSportName(process.env.SCOREBOARD_SPORT_NAME || process.env.SPORT_NAME || 'football');
+const SELF_UPDATE_REMOTE = process.env.SCOREBOARD_UPDATE_REMOTE || 'origin';
+const SELF_UPDATE_ENABLED = process.env.SCOREBOARD_AUTO_UPDATE !== '0';
 const DATA_DIR = path.join(__dirname, 'data');
 const CREST_DIR = path.join(DATA_DIR, 'crests');
 const CACHE_FILE = path.join(DATA_DIR, 'cache.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const LIVE_POLL_MS = 30_000;
-const IDLE_POLL_MS = 12 * 60_000;
+const SCHEDULE_POLL_MS = 15 * 60_000;
 const ERROR_RETRY_MS = 5 * 60_000;
 const RATE_LIMIT_BACKOFF_MS = 15 * 60_000;
 const LOW_BUCKET_THRESHOLD = 1;
-const UPCOMING_WINDOW_DAYS = 14;
+const UPCOMING_WINDOW_DAYS = 10;
 const KICKOFF_WATCH_WINDOW_MS = 5 * 60_000;
 const CLIENT_REFRESH_LIVE_MS = 5_000;
 const CLIENT_REFRESH_IDLE_MS = 30_000;
@@ -53,6 +60,7 @@ const STAGE_WEIGHTS = new Map([
 let state = {
   mode: 'starting',
   selectedMatch: null,
+  nextMatch: null,
   lastUpdated: null,
   nextApiPollAt: null,
   api: {
@@ -61,6 +69,12 @@ let state = {
     requestCounterResetSeconds: null,
     requestCounterResetAt: null,
     throttleUntil: null
+  },
+  selfUpdate: {
+    enabled: SELF_UPDATE_ENABLED,
+    lastCheckedAt: null,
+    lastResult: null,
+    lastError: null
   },
   message: 'Starting scoreboard...',
   error: null,
@@ -90,7 +104,9 @@ const server = http.createServer(async (req, res) => {
           sportName: SPORT_NAME,
           sportTitle: titleCase(SPORT_NAME)
         },
-        clientRefreshMs: state.mode === 'live' ? CLIENT_REFRESH_LIVE_MS : CLIENT_REFRESH_IDLE_MS
+        clientRefreshMs: state.mode === 'live' || state.mode === 'kickoff-watch'
+          ? CLIENT_REFRESH_LIVE_MS
+          : CLIENT_REFRESH_IDLE_MS
       });
       return;
     }
@@ -125,7 +141,8 @@ async function loadCache() {
       ...state,
       ...cached,
       mode: cached.mode === 'live' ? 'stale-live' : cached.mode || 'cached',
-      message: cached.selectedMatch ? 'Showing cached match data.' : state.message,
+      nextMatch: cached.nextMatch || null,
+      message: cached.selectedMatch ? 'Showing cached match data.' : cached.message || state.message,
       tokenConfigured: Boolean(TOKEN)
     };
   } catch {
@@ -137,6 +154,7 @@ async function saveCache() {
   const cachePayload = {
     mode: state.mode,
     selectedMatch: state.selectedMatch,
+    nextMatch: state.nextMatch,
     lastUpdated: state.lastUpdated,
     message: state.message,
     error: state.error
@@ -152,8 +170,9 @@ function schedulePoll(delayMs) {
     poll().catch((error) => {
       console.error('[poll] unexpected failure', error);
       state.error = error.message;
-      state.mode = state.selectedMatch ? 'cached' : 'error';
-      state.message = state.selectedMatch ? 'Showing cached match data.' : 'Waiting for live match data...';
+      clearActiveMatch();
+      state.mode = 'error';
+      state.message = 'No active games right now.';
       schedulePoll(error.retryAfterMs || ERROR_RETRY_MS);
     });
   }, Math.max(100, effectiveDelayMs));
@@ -161,11 +180,12 @@ function schedulePoll(delayMs) {
 
 async function poll() {
   if (!TOKEN) {
-    state.mode = state.selectedMatch ? 'cached' : 'waiting';
-    state.message = state.selectedMatch ? 'Showing cached match data.' : 'Waiting for live match data...';
+    clearActiveMatch();
+    state.mode = 'waiting';
+    state.message = 'No active games right now.';
     state.error = 'A free football-data.org token is required for match endpoints.';
     state.tokenConfigured = false;
-    schedulePoll(IDLE_POLL_MS);
+    schedulePoll(SCHEDULE_POLL_MS);
     return;
   }
 
@@ -180,6 +200,7 @@ async function poll() {
     if (liveSelection) {
       state.mode = 'live';
       state.selectedMatch = await normalizeMatch(liveSelection);
+      state.nextMatch = null;
       state.lastUpdated = new Date().toISOString();
       state.message = 'Live match data loaded.';
       state.error = null;
@@ -188,11 +209,13 @@ async function poll() {
       return;
     }
 
-    if (shouldUseLiveEndpoint()) {
-      state.mode = state.selectedMatch ? 'cached' : 'waiting';
-      state.message = state.selectedMatch ? 'Waiting for kickoff updates...' : 'Waiting for live match data...';
+    if (state.nextMatch && shouldUseLiveEndpoint()) {
+      state.mode = 'kickoff-watch';
+      state.selectedMatch = null;
+      state.message = 'No active games right now.';
       state.lastUpdated = new Date().toISOString();
       await saveCache();
+      await checkForSelfUpdate();
       schedulePoll(LIVE_POLL_MS);
       return;
     }
@@ -203,34 +226,113 @@ async function poll() {
 
   if (upcomingSelection) {
     state.mode = 'idle';
-    state.selectedMatch = await normalizeMatch(upcomingSelection);
+    state.selectedMatch = null;
+    state.nextMatch = await normalizeMatch(upcomingSelection);
     state.lastUpdated = new Date().toISOString();
-    state.message = 'Upcoming major match loaded.';
+    state.message = 'No active games right now.';
     state.error = null;
     await saveCache();
+    await checkForSelfUpdate();
     schedulePoll(nextIdleDelay(upcomingSelection.utcDate));
     return;
   }
 
-  state.mode = state.selectedMatch ? 'cached' : 'waiting';
-  state.message = state.selectedMatch ? 'Showing cached match data.' : 'Waiting for live match data...';
+  state.mode = 'waiting';
+  state.selectedMatch = null;
+  state.nextMatch = null;
+  state.message = 'No active games right now.';
   state.lastUpdated = new Date().toISOString();
   await saveCache();
-  schedulePoll(IDLE_POLL_MS);
+  await checkForSelfUpdate();
+  schedulePoll(SCHEDULE_POLL_MS);
+}
+
+function clearActiveMatch() {
+  state.selectedMatch = null;
 }
 
 function shouldUseLiveEndpoint() {
-  if (!state.selectedMatch?.utcDate) return false;
-  const kickoff = new Date(state.selectedMatch.utcDate).getTime();
+  const kickoffSource = state.nextMatch || state.selectedMatch;
+  if (!kickoffSource?.utcDate) return false;
+  const kickoff = new Date(kickoffSource.utcDate).getTime();
   return Number.isFinite(kickoff) && Date.now() >= kickoff - KICKOFF_WATCH_WINDOW_MS;
 }
 
 function nextIdleDelay(utcDate) {
   const kickoff = new Date(utcDate).getTime();
-  if (!Number.isFinite(kickoff)) return IDLE_POLL_MS;
+  if (!Number.isFinite(kickoff)) return SCHEDULE_POLL_MS;
   const untilWatchWindow = kickoff - KICKOFF_WATCH_WINDOW_MS - Date.now();
   if (untilWatchWindow <= 0) return LIVE_POLL_MS;
-  return Math.min(IDLE_POLL_MS, Math.max(LIVE_POLL_MS, untilWatchWindow));
+  return Math.min(SCHEDULE_POLL_MS, Math.max(LIVE_POLL_MS, untilWatchWindow));
+}
+
+async function checkForSelfUpdate() {
+  if (!SELF_UPDATE_ENABLED || !TOKEN) return;
+
+  state.selfUpdate.lastCheckedAt = new Date().toISOString();
+  state.selfUpdate.lastError = null;
+
+  try {
+    const hasLocalChanges = await runGitText(['status', '--porcelain']);
+    if (hasLocalChanges) {
+      state.selfUpdate.lastResult = 'Skipped self-update: local checkout has uncommitted changes.';
+      return;
+    }
+
+    const branch = await currentGitBranch();
+    if (!branch) {
+      state.selfUpdate.lastResult = 'Skipped self-update: current checkout is detached.';
+      return;
+    }
+
+    await runGit(['fetch', '--quiet', SELF_UPDATE_REMOTE, branch]);
+    const localHead = await runGitText(['rev-parse', 'HEAD']);
+    const remoteHead = await runGitText(['rev-parse', `${SELF_UPDATE_REMOTE}/${branch}`]);
+
+    if (localHead === remoteHead) {
+      state.selfUpdate.lastResult = `Already up to date with ${SELF_UPDATE_REMOTE}/${branch}.`;
+      return;
+    }
+
+    const remoteContainsLocal = await gitSucceeds(['merge-base', '--is-ancestor', 'HEAD', `${SELF_UPDATE_REMOTE}/${branch}`]);
+    if (!remoteContainsLocal) {
+      state.selfUpdate.lastResult = `Skipped self-update: local HEAD has diverged from ${SELF_UPDATE_REMOTE}/${branch}.`;
+      return;
+    }
+
+    console.log(`[self-update] ${SELF_UPDATE_REMOTE}/${branch} is ahead; pulling and rebooting.`);
+    await runGit(['pull', '--ff-only', SELF_UPDATE_REMOTE, branch]);
+    state.selfUpdate.lastResult = `Updated to ${remoteHead}; rebooting.`;
+    await execFileAsync('sudo', ['-n', 'reboot'], { cwd: __dirname });
+  } catch (error) {
+    const message = error.stderr?.trim() || error.stdout?.trim() || error.message;
+    state.selfUpdate.lastError = message;
+    state.selfUpdate.lastResult = 'Self-update failed.';
+    console.warn(`[self-update] ${message}`);
+  }
+}
+
+async function currentGitBranch() {
+  const branch = await runGitText(['rev-parse', '--abbrev-ref', 'HEAD']);
+  return branch === 'HEAD' ? null : branch;
+}
+
+async function runGit(args) {
+  return execFileAsync('git', args, { cwd: __dirname });
+}
+
+async function runGitText(args) {
+  const { stdout } = await runGit(args);
+  return stdout.trim();
+}
+
+async function gitSucceeds(args) {
+  try {
+    await runGit(args);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function fetchMatches(filters) {
@@ -545,6 +647,36 @@ function normalizeSportName(value) {
 
 function titleCase(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function loadDotEnv() {
+  const envPath = path.join(__dirname, '.env');
+  let text = '';
+  try {
+    text = readFileSync(envPath, 'utf8');
+  } catch {
+    return;
+  }
+
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const separatorIndex = trimmed.indexOf('=');
+    if (separatorIndex <= 0) continue;
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    if (!key || process.env[key] !== undefined) continue;
+
+    let value = trimmed.slice(separatorIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
 }
 
 export {

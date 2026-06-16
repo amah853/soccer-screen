@@ -31,6 +31,7 @@ let goalAudioContext = null;
 const activeGoalSounds = new Set();
 const goalSoundPrimer = new Audio('/cheering.mp3');
 goalSoundPrimer.preload = 'auto';
+const PREGAME_COUNTDOWN_MS = 60 * 60_000;
 
 async function refresh() {
   try {
@@ -50,13 +51,19 @@ async function refresh() {
 
 function render(state) {
   const match = state.selectedMatch;
+  const nextMatch = state.nextMatch;
   const sportName = state.config?.sportName || 'football';
   const sportTitle = state.config?.sportTitle || 'Football';
   document.title = `Live ${sportTitle} Scoreboard`;
 
   if (!match) {
-    elements.competition.textContent = sportTitle;
-    elements.stage.textContent = 'MATCH';
+    if (shouldShowNextMatch(nextMatch)) {
+      renderPregame(state, nextMatch, sportTitle);
+      return;
+    }
+
+    elements.competition.textContent = 'No Active Games';
+    elements.stage.textContent = sportTitle;
     elements.homeName.textContent = 'Home';
     elements.awayName.textContent = 'Away';
     setScore(elements.homeScore, '0');
@@ -64,8 +71,8 @@ function render(state) {
     setCrest(elements.homeCrest, elements.homeFallback, null, 'FC');
     setCrest(elements.awayCrest, elements.awayFallback, null, 'FC');
     elements.liveDot.classList.remove('is-live');
-    elements.matchClock.textContent = `Waiting for live ${sportName} match data...`;
-    elements.updateLine.textContent = state.message || 'Last update pending';
+    elements.matchClock.textContent = `No active ${sportName} games`;
+    elements.updateLine.textContent = idleUpdateText(state, nextMatch);
     window.requestAnimationFrame(fitTeamNames);
     previousScore = null;
     return;
@@ -91,6 +98,22 @@ function render(state) {
   elements.liveDot.classList.toggle('is-live', isLive(match.status));
   updateClock(state);
   elements.updateLine.textContent = updateText(state, match);
+}
+
+function renderPregame(state, match, sportTitle) {
+  elements.competition.textContent = match.competition?.name || sportTitle;
+  elements.stage.textContent = match.stage || 'MATCH';
+  elements.homeName.textContent = match.homeTeam?.name || 'Home';
+  elements.awayName.textContent = match.awayTeam?.name || 'Away';
+  setScore(elements.homeScore, '0');
+  setScore(elements.awayScore, '0');
+  setCrest(elements.homeCrest, elements.homeFallback, match.homeTeam?.crest, match.homeTeam?.tla);
+  setCrest(elements.awayCrest, elements.awayFallback, match.awayTeam?.crest, match.awayTeam?.tla);
+  elements.liveDot.classList.remove('is-live');
+  elements.matchClock.textContent = nextMatchClockText(match);
+  elements.updateLine.textContent = updateText(state, match);
+  window.requestAnimationFrame(fitTeamNames);
+  previousScore = null;
 }
 
 function setScore(element, value, bump = false) {
@@ -120,8 +143,13 @@ function setCrest(img, fallback, src, initials) {
 }
 
 function updateClock(state = lastState) {
-  if (!state?.selectedMatch) return;
-  elements.matchClock.textContent = clockText(state);
+  if (state?.selectedMatch) {
+    elements.matchClock.textContent = clockText(state);
+    return;
+  }
+  if (shouldShowNextMatch(state?.nextMatch)) {
+    elements.matchClock.textContent = nextMatchClockText(state.nextMatch);
+  }
 }
 
 function clockText(state) {
@@ -185,6 +213,39 @@ function updateText(state, match) {
   const next = state.nextApiPollAt ? new Date(state.nextApiPollAt) : null;
   const nextText = next ? `Next check ${next.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : '';
   return [updatedText, nextText].filter(Boolean).join(' · ');
+}
+
+function idleUpdateText(state, nextMatch) {
+  const parts = [state.message || 'No active games right now.'];
+  if (nextMatch) {
+    const home = nextMatch.homeTeam?.name || 'Home';
+    const away = nextMatch.awayTeam?.name || 'Away';
+    parts.push(`Next: ${home} vs ${away} at ${kickoffText(nextMatch.utcDate)}`);
+  }
+  const next = state.nextApiPollAt ? new Date(state.nextApiPollAt) : null;
+  if (next) {
+    parts.push(`Next schedule check ${next.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
+  }
+  return parts.filter(Boolean).join(' · ');
+}
+
+function shouldShowNextMatch(match) {
+  if (!match?.utcDate) return false;
+  const kickoff = new Date(match.utcDate).getTime();
+  if (!Number.isFinite(kickoff)) return false;
+  return Date.now() >= kickoff - PREGAME_COUNTDOWN_MS;
+}
+
+function nextMatchClockText(match) {
+  const kickoff = new Date(match.utcDate).getTime();
+  if (!Number.isFinite(kickoff)) return 'Kickoff TBA';
+
+  const remainingSeconds = Math.ceil((kickoff - Date.now()) / 1000);
+  if (remainingSeconds <= 0) return 'Kickoff now';
+
+  const minutes = Math.floor(remainingSeconds / 60);
+  const seconds = remainingSeconds % 60;
+  return `Starts in ${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
 function isLive(status) {
@@ -329,7 +390,11 @@ window.addEventListener('keydown', (event) => {
 });
 
 window.setInterval(() => {
-  if (isLive(lastState?.selectedMatch?.status)) updateClock(lastState);
+  if (isLive(lastState?.selectedMatch?.status) || shouldShowNextMatch(lastState?.nextMatch)) {
+    updateClock(lastState);
+  } else if (lastState?.nextMatch) {
+    render(lastState);
+  }
 }, 1000);
 
 refresh();
