@@ -81,7 +81,8 @@ let state = {
   config: {
     sportName: SPORT_NAME,
     sportTitle: titleCase(SPORT_NAME)
-  }
+  },
+  testGoal: null
 };
 
 let pollTimer = null;
@@ -98,6 +99,11 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host}`);
 
     if (url.pathname === '/api/state') {
+      if (req.method !== 'GET') {
+        sendJson(res, { error: 'Method not allowed' }, 405);
+        return;
+      }
+
       sendJson(res, {
         ...state,
         config: {
@@ -108,6 +114,20 @@ const server = http.createServer(async (req, res) => {
           ? CLIENT_REFRESH_LIVE_MS
           : CLIENT_REFRESH_IDLE_MS
       });
+      return;
+    }
+
+    if (url.pathname === '/api/test-goal') {
+      if (req.method !== 'POST') {
+        sendJson(res, { error: 'Method not allowed' }, 405);
+        return;
+      }
+
+      state.testGoal = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        triggeredAt: new Date().toISOString()
+      };
+      sendJson(res, { ok: true, testGoal: state.testGoal });
       return;
     }
 

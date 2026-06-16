@@ -28,6 +28,7 @@ let shortcutCount = 0;
 let shortcutLastPressAt = 0;
 let simulatedGoalSide = 'home';
 let goalAudioContext = null;
+let lastTestGoalId = null;
 const activeGoalSounds = new Set();
 const goalSoundPrimer = new Audio('/cheering.mp3');
 goalSoundPrimer.preload = 'auto';
@@ -40,6 +41,7 @@ async function refresh() {
     lastState = state;
     nextRefreshMs = state.clientRefreshMs || nextRefreshMs;
     render(state);
+    handleTestGoal(state);
   } catch {
     elements.matchClock.textContent = 'Waiting for live match data...';
     elements.updateLine.textContent = 'Connection lost. Retrying locally.';
@@ -47,6 +49,14 @@ async function refresh() {
   } finally {
     window.setTimeout(refresh, nextRefreshMs);
   }
+}
+
+function handleTestGoal(state) {
+  const testGoalId = state.testGoal?.id;
+  if (!testGoalId || testGoalId === lastTestGoalId) return;
+
+  lastTestGoalId = testGoalId;
+  simulateGoal();
 }
 
 function render(state) {
