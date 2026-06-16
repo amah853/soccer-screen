@@ -168,9 +168,17 @@ function schedulePoll(delayMs) {
   const effectiveDelayMs = applyHeaderThrottle(delayMs);
   state.nextApiPollAt = new Date(Date.now() + effectiveDelayMs).toISOString();
   pollTimer = setTimeout(() => {
-    poll().catch((error) => {
+    poll().catch(async (error) => {
       console.error('[poll] unexpected failure', error);
       state.error = error.message;
+      if (isLiveStatus(state.selectedMatch?.status)) {
+        state.mode = 'stale-live';
+        state.message = 'Showing cached live match data.';
+        await saveCache();
+        schedulePoll(error.retryAfterMs || LIVE_POLL_MS);
+        return;
+      }
+
       clearActiveMatch();
       state.mode = 'error';
       state.message = 'No active games right now.';
@@ -202,6 +210,19 @@ async function poll() {
     if (liveSelection) {
       state.mode = 'live';
       state.selectedMatch = await normalizeMatch(liveSelection);
+      state.nextMatch = null;
+      state.lastUpdated = new Date().toISOString();
+      state.message = 'Live match data loaded.';
+      state.error = null;
+      await saveCache();
+      schedulePoll(LIVE_POLL_MS);
+      return;
+    }
+
+    const confirmedMatch = await confirmCurrentLiveMatch();
+    if (confirmedMatch) {
+      state.mode = 'live';
+      state.selectedMatch = confirmedMatch;
       state.nextMatch = null;
       state.lastUpdated = new Date().toISOString();
       state.message = 'Live match data loaded.';
@@ -251,6 +272,16 @@ async function poll() {
 
 function clearActiveMatch() {
   state.selectedMatch = null;
+}
+
+async function confirmCurrentLiveMatch() {
+  if (!state.selectedMatch?.id || !isLiveStatus(state.selectedMatch.status)) return null;
+
+  const match = await fetchMatchById(state.selectedMatch.id);
+  if (isLiveStatus(match?.status)) return normalizeMatch(match);
+
+  clearActiveMatch();
+  return null;
 }
 
 function shouldUseLiveEndpoint() {
@@ -341,6 +372,11 @@ async function fetchMatches(filters) {
   const params = new URLSearchParams({ competitions: COMPETITION_CODES, ...filters });
   const payload = await footballDataFetch(`/matches?${params.toString()}`);
   return Array.isArray(payload.matches) ? payload.matches : [];
+}
+
+async function fetchMatchById(id) {
+  const payload = await footballDataFetch(`/matches/${id}`);
+  return payload.match || payload;
 }
 
 async function fetchUpcomingMatches() {
@@ -649,6 +685,10 @@ function normalizeSportName(value) {
 
 function titleCase(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function isLiveStatus(status) {
+  return status === 'IN_PLAY' || status === 'PAUSED';
 }
 
 function loadDotEnv() {
