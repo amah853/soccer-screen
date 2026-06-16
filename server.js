@@ -14,7 +14,7 @@ const execFileAsync = promisify(execFile);
 loadDotEnv();
 
 const PORT = Number(process.env.PORT || 3000);
-const API_BASE = 'https://api.football-data.org/v4';
+const ESPN_API_BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
 const TOKEN = process.env.FOOTBALL_DATA_API_TOKEN || process.env.FOOTBALL_DATA_TOKEN || '';
 const SPORT_NAME = normalizeSportName(process.env.SCOREBOARD_SPORT_NAME || process.env.SPORT_NAME || 'football');
 const SELF_UPDATE_REMOTE = process.env.SCOREBOARD_UPDATE_REMOTE || 'origin';
@@ -24,29 +24,28 @@ const CREST_DIR = path.join(DATA_DIR, 'crests');
 const CACHE_FILE = path.join(DATA_DIR, 'cache.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-const LIVE_POLL_MS = 30_000;
-const SCHEDULE_POLL_MS = 15 * 60_000;
+const LIVE_POLL_MS = 5_000;
+const SCHEDULE_POLL_MS = 5_000;
 const ERROR_RETRY_MS = 5 * 60_000;
 const RATE_LIMIT_BACKOFF_MS = 15 * 60_000;
 const LOW_BUCKET_THRESHOLD = 1;
 const UPCOMING_WINDOW_DAYS = 10;
 const KICKOFF_WATCH_WINDOW_MS = 5 * 60_000;
 const CLIENT_REFRESH_LIVE_MS = 5_000;
-const CLIENT_REFRESH_IDLE_MS = 30_000;
+const CLIENT_REFRESH_IDLE_MS = 5_000;
 
-const MAJOR_COMPETITIONS = [
-  { code: 'WC', name: 'FIFA World Cup', weight: 1000 },
-  { code: 'CL', name: 'UEFA Champions League', weight: 920 },
-  { code: 'EC', name: 'UEFA European Championship', weight: 900 },
-  { code: 'PL', name: 'Premier League', weight: 820 },
-  { code: 'PD', name: 'LaLiga', weight: 810 },
-  { code: 'BL1', name: 'Bundesliga', weight: 800 },
-  { code: 'SA', name: 'Serie A', weight: 790 },
-  { code: 'FL1', name: 'Ligue 1', weight: 780 }
+const ESPN_LEAGUES = [
+  { code: 'fifa.world', name: 'FIFA World Cup', weight: 1000 },
+  { code: 'uefa.champions', name: 'UEFA Champions League', weight: 920 },
+  { code: 'uefa.euro', name: 'UEFA European Championship', weight: 900 },
+  { code: 'eng.1', name: 'Premier League', weight: 820 },
+  { code: 'esp.1', name: 'LaLiga', weight: 810 },
+  { code: 'ger.1', name: 'Bundesliga', weight: 800 },
+  { code: 'ita.1', name: 'Serie A', weight: 790 },
+  { code: 'fra.1', name: 'Ligue 1', weight: 780 }
 ];
 
-const COMPETITION_CODES = MAJOR_COMPETITIONS.map((competition) => competition.code).join(',');
-const COMPETITION_WEIGHTS = new Map(MAJOR_COMPETITIONS.map((competition) => [competition.code, competition.weight]));
+const COMPETITION_WEIGHTS = new Map(ESPN_LEAGUES.map((competition) => [competition.code, competition.weight]));
 const STAGE_WEIGHTS = new Map([
   ['FINAL', 100],
   ['THIRD_PLACE', 90],
@@ -126,9 +125,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Scoreboard running at http://localhost:${PORT}`);
-  if (!TOKEN) {
-    console.warn('FOOTBALL_DATA_API_TOKEN is not set. The UI will stay in waiting mode until a free football-data.org token is configured.');
-  }
 });
 
 async function ensureDirectories() {
@@ -188,17 +184,7 @@ function schedulePoll(delayMs) {
 }
 
 async function poll() {
-  if (!TOKEN) {
-    clearActiveMatch();
-    state.mode = 'waiting';
-    state.message = 'No active games right now.';
-    state.error = 'A free football-data.org token is required for match endpoints.';
-    state.tokenConfigured = false;
-    schedulePoll(SCHEDULE_POLL_MS);
-    return;
-  }
-
-  state.tokenConfigured = true;
+  state.tokenConfigured = Boolean(TOKEN);
 
   const shouldCheckLive = needsStartupLiveCheck || state.mode === 'starting' || state.mode === 'live' || shouldUseLiveEndpoint();
 
@@ -300,7 +286,7 @@ function nextIdleDelay(utcDate) {
 }
 
 async function checkForSelfUpdate() {
-  if (!SELF_UPDATE_ENABLED || !TOKEN) return;
+  if (!SELF_UPDATE_ENABLED) return;
 
   state.selfUpdate.lastCheckedAt = new Date().toISOString();
   state.selfUpdate.lastError = null;
@@ -369,52 +355,87 @@ async function gitSucceeds(args) {
 }
 
 async function fetchMatches(filters) {
-  const params = new URLSearchParams({ competitions: COMPETITION_CODES, ...filters });
-  const payload = await footballDataFetch(`/matches?${params.toString()}`);
-  return Array.isArray(payload.matches) ? payload.matches : [];
+  const events = await fetchEspnScoreboards();
+  const normalized = await Promise.all(events.map((event) => normalizeMatch(event)));
+  if (filters?.status === 'LIVE') {
+    return normalized.filter((match) => isLiveStatus(match.status));
+  }
+  return normalized;
 }
 
 async function fetchMatchById(id) {
-  const payload = await footballDataFetch(`/matches/${id}`);
-  return payload.match || payload;
+  const leagueCode = state.selectedMatch?.providerLeague || state.nextMatch?.providerLeague;
+  if (!leagueCode) return null;
+
+  const payload = await espnFetch(`/${leagueCode}/summary?${new URLSearchParams({ event: String(id) })}`);
+  const competition = payload.header?.competitions?.[0];
+  if (!competition) return null;
+
+  return {
+    id: payload.header?.id || id,
+    date: competition.date || payload.header?.date || state.selectedMatch?.utcDate,
+    name: payload.header?.name || '',
+    shortName: payload.header?.shortName || '',
+    status: competition.status || payload.header?.status,
+    competitions: [competition],
+    providerLeague: leagueCode,
+    providerLeagueName: leagueName(leagueCode)
+  };
 }
 
 async function fetchUpcomingMatches() {
   const now = new Date();
   const end = new Date(now.getTime() + UPCOMING_WINDOW_DAYS * 24 * 60 * 60_000);
-  const params = new URLSearchParams({
-    competitions: COMPETITION_CODES,
-    dateFrom: formatDate(now),
-    dateTo: formatDate(end)
-  });
-  const payload = await footballDataFetch(`/matches?${params.toString()}`);
-  return (Array.isArray(payload.matches) ? payload.matches : []).filter((match) => {
+  const events = await fetchEspnScoreboards(`${formatDateCompact(now)}-${formatDateCompact(end)}`);
+  const normalized = await Promise.all(events.map((event) => normalizeMatch(event)));
+  return normalized.filter((match) => {
     const kickoff = new Date(match.utcDate).getTime();
     return kickoff >= Date.now() - 60_000 && ['TIMED', 'SCHEDULED'].includes(match.status);
   });
 }
 
-async function footballDataFetch(endpoint) {
-  await enforceLocalRateLimit();
+async function fetchEspnScoreboards(dates) {
+  const results = await Promise.allSettled(ESPN_LEAGUES.map(async (league) => {
+    const params = new URLSearchParams();
+    if (dates) params.set('dates', dates);
+    const query = params.toString();
+    const payload = await espnFetch(`/${league.code}/scoreboard${query ? `?${query}` : ''}`);
+    return (Array.isArray(payload.events) ? payload.events : []).map((event) => ({
+      ...event,
+      providerLeague: league.code,
+      providerLeagueName: payload.leagues?.[0]?.name || league.name
+    }));
+  }));
 
-  const response = await fetch(`${API_BASE}${endpoint}`, {
+  const events = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      events.push(...result.value);
+    } else {
+      console.warn(`[espn] scoreboard fetch failed: ${result.reason?.message || result.reason}`);
+    }
+  }
+  return events;
+}
+
+async function espnFetch(endpoint) {
+  const response = await fetch(`${ESPN_API_BASE}${endpoint}`, {
     headers: {
-      'X-Auth-Token': TOKEN,
       'User-Agent': 'soccer-screen-raspberry-pi/1.0'
     }
   });
 
-  recordRequest(response.headers);
+  state.api.lastRequestAt = new Date().toISOString();
 
   if (response.status === 429) {
     const retryAfterMs = retryDelayFromHeaders(response.headers) || RATE_LIMIT_BACKOFF_MS;
-    state.error = 'football-data.org rate limit reached; backing off until the request counter resets.';
+    state.error = 'ESPN API rate limit reached; backing off before the next request.';
     throw Object.assign(new Error('Rate limit reached'), { retryAfterMs });
   }
 
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`football-data.org ${response.status}: ${text || response.statusText}`);
+    throw new Error(`ESPN API ${response.status}: ${text || response.statusText}`);
   }
 
   return text ? JSON.parse(text) : {};
@@ -507,6 +528,9 @@ function importanceScore(match) {
 }
 
 async function normalizeMatch(match) {
+  if (match?.homeTeam && match?.awayTeam && match?.score) return match;
+  if (Array.isArray(match?.competitions)) return normalizeEspnMatch(match);
+
   const homeScore = scoreValue(match.score?.fullTime?.home ?? match.score?.regularTime?.home ?? match.score?.halfTime?.home);
   const awayScore = scoreValue(match.score?.fullTime?.away ?? match.score?.regularTime?.away ?? match.score?.halfTime?.away);
   const homeTeam = await normalizeTeam(match.homeTeam);
@@ -529,22 +553,59 @@ async function normalizeMatch(match) {
       home: homeScore,
       away: awayScore
     },
-    lastUpdated: match.lastUpdated || null
+    lastUpdated: match.lastUpdated || null,
+    providerLeague: match.providerLeague || null
+  };
+}
+
+async function normalizeEspnMatch(event) {
+  const competition = event.competitions?.[0] || {};
+  const competitors = Array.isArray(competition.competitors) ? competition.competitors : [];
+  const homeCompetitor = competitors.find((competitor) => competitor.homeAway === 'home') || competitors[0] || {};
+  const awayCompetitor = competitors.find((competitor) => competitor.homeAway === 'away') || competitors[1] || {};
+  const status = competition.status || event.status || {};
+  const statusType = status.type || {};
+  const leagueCode = event.providerLeague || event.league?.slug || '';
+
+  return {
+    id: event.id || competition.id,
+    status: espnStatus(statusType),
+    minute: espnMinute(status),
+    utcDate: event.date || competition.date || null,
+    competition: {
+      code: leagueCode,
+      name: event.providerLeagueName || leagueName(leagueCode) || 'Soccer'
+    },
+    stage: formatStage(event.season?.slug || event.season?.type?.name || ''),
+    group: '',
+    homeTeam: await normalizeTeam(homeCompetitor.team),
+    awayTeam: await normalizeTeam(awayCompetitor.team),
+    score: {
+      home: scoreValue(homeCompetitor.score),
+      away: scoreValue(awayCompetitor.score)
+    },
+    lastUpdated: event.lastUpdated || null,
+    providerLeague: leagueCode
   };
 }
 
 async function normalizeTeam(team = {}) {
+  const logo = team.crest || team.logo || team.logos?.find((item) => item.rel?.includes('default'))?.href || team.logos?.[0]?.href || null;
+  const name = team.shortName || team.shortDisplayName || team.name || team.displayName || team.tla || team.abbreviation || 'TBD';
+  const fullName = team.name || team.displayName || team.shortName || team.shortDisplayName || 'TBD';
+
   return {
     id: team.id || null,
-    name: team.shortName || team.name || team.tla || 'TBD',
-    fullName: team.name || team.shortName || 'TBD',
-    tla: team.tla || initials(team.name || team.shortName || 'TBD'),
-    crest: await ensureCrest(team)
+    name,
+    fullName,
+    tla: team.tla || team.abbreviation || initials(fullName),
+    crest: await ensureCrest({ ...team, crest: logo })
   };
 }
 
 function scoreValue(value) {
-  return Number.isInteger(value) ? value : 0;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
 }
 
 async function ensureCrest(team = {}) {
@@ -659,13 +720,29 @@ function contentType(filePath) {
   }[ext] || 'application/octet-stream';
 }
 
-function formatDate(date) {
-  return date.toISOString().slice(0, 10);
+function formatDateCompact(date) {
+  return date.toISOString().slice(0, 10).replaceAll('-', '');
 }
 
 function formatStage(stage) {
   if (!stage) return 'MATCH';
-  return stage.replaceAll('_', ' ');
+  return stage.replaceAll('_', ' ').replaceAll('-', ' ').toUpperCase();
+}
+
+function espnStatus(type = {}) {
+  if (type.state === 'in') return type.name === 'STATUS_HALFTIME' ? 'PAUSED' : 'IN_PLAY';
+  if (type.state === 'pre') return 'TIMED';
+  if (type.state === 'post' || type.completed) return 'FINISHED';
+  return 'SCHEDULED';
+}
+
+function espnMinute(status = {}) {
+  if (!Number.isFinite(status.clock)) return null;
+  return Math.max(0, Math.floor(status.clock / 60));
+}
+
+function leagueName(code) {
+  return ESPN_LEAGUES.find((league) => league.code === code)?.name || '';
 }
 
 function initials(name) {
